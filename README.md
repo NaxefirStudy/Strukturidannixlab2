@@ -11,19 +11,30 @@
 ```Python
 import numpy as np
 import time
-import sys
-import torch
-from numba import njit, prange, set_num_threads
+from scipy.linalg.blas import cgemm  # BLAS implementation
 
+N_LARGE = 4096
+N_SMALL = 200
 
-def generate_matrix(n):
-    print(f"  - Генерация {n}x{n}...", end=' ')
-    mat = (np.random.rand(n, n).astype(np.float32) + 
-           1j*np.random.rand(n, n).astype(np.float32)).astype(np.complex64)
-    print(f"OK ({mat.nbytes//1024**2} МБ)")
-    return np.ascontiguousarray(mat)
+np.random.seed(42)
+A_large = np.random.rand(N_LARGE, N_LARGE).astype(np.complex64) + 1j * np.random.rand(N_LARGE, N_LARGE).astype(np.complex64)
+B_large = np.random.rand(N_LARGE, N_LARGE).astype(np.complex64) + 1j * np.random.rand(N_LARGE, N_LARGE).astype(np.complex64)
 
-def classic_matmul(A, B, n):
+A_small = np.random.rand(N_SMALL, N_SMALL).astype(np.complex64) + 1j * np.random.rand(N_SMALL, N_SMALL).astype(np.complex64)
+B_small = np.random.rand(N_SMALL, N_SMALL).astype(np.complex64) + 1j * np.random.rand(N_SMALL, N_SMALL).astype(np.complex64)
+
+complexity_small = 2 * N_SMALL**3
+complexity_large = 2 * N_LARGE**3
+
+def measure_performance(func, *args):
+    start_time = time.time()
+    result = func(*args)
+    elapsed_time = time.time() - start_time
+    mflops = complexity_small / (elapsed_time * 1e6) if args[0].shape[0] == N_SMALL else complexity_large / (elapsed_time * 1e6)
+    return result, elapsed_time, mflops
+
+def matrix_multiply_formula(A, B):
+    n = A.shape[0]
     C = np.zeros((n, n), dtype=np.complex64)
     for i in range(n):
         for j in range(n):
@@ -31,94 +42,58 @@ def classic_matmul(A, B, n):
                 C[i, j] += A[i, k] * B[k, j]
     return C
 
-def optimized_matmul(A, B):
-    try:
-        # Попытка использовать GPU через PyTorch
-        if torch.cuda.is_available():
-            with torch.no_grad():
-                A_t = torch.tensor(A, device='cuda', dtype=torch.complex64)
-                B_t = torch.tensor(B, device='cuda', dtype=torch.complex64)
-                C_t = torch.matmul(A_t, B_t)
-                return C_t.cpu().numpy()
-        else:
-            raise Exception("CUDA не доступен")
-    except:
-        try:
-            return np.dot(A, B)
-        except:
-            # Аварийный вариант через Numba
-            @njit(parallel=True, fastmath=True)
-            def fallback_matmul(A, B):
-                n = A.shape[0]
-                C = np.empty((n, n), dtype=np.complex64)
-                for i in prange(n):
-                    C[i] = np.dot(A[i], B)
-                return C
-            return fallback_matmul(A, B)
+print("Работу выполнил: Попов Олег Михайлович 09.03.01ПОВа-o24")
+print("=" * 50)
+print("1-Й ВАРИАНТ: УМНОЖЕНИЕ ПО ФОРМУЛЕ ИЗ ЛИНЕЙНОЙ АЛГЕБРЫ")
+print(f"Размер матрицы: {N_SMALL}x{N_SMALL}")
+C_formula, time_formula, mflops_formula = measure_performance(matrix_multiply_formula, A_small, B_small)
+print(f"Время выполнения: {time_formula:.2f} секунд")
+print(f"Производительность: {mflops_formula:.2f} MFLOPS")
+print("=" * 50)
 
-def main():
-    print("ЛАБОРАТОРНАЯ РАБОТА: ПЕРЕМНОЖЕНИЕ МАТРИЦ")
-    print("========================================\n")
+def matrix_multiply_blas(A, B):
+    return cgemm(alpha=1.0, a=A, b=B)
 
-    # Вариант 1: Классический (400x400)
-    print("1. Классический метод (400x400)")
-    n1 = 400
-    A1 = generate_matrix(n1)
-    B1 = generate_matrix(n1)
-    
-    start = time.perf_counter()
-    classic_matmul(A1, B1, n1)
-    time1 = time.perf_counter() - start
-    mflops1 = (2 * n1**3) / (time1 * 1e6)
-    
-    print(f"\n  Результаты:")
-    print(f"  Время: {time1:.6f} с")
-    print(f"  MFLOPS: {mflops1:.2f}")
-    print(f"  Память: {A1.nbytes * 3 / 1e6:.2f} МБ")
-    print("----------------------------------------\n")
+print("\n" + "=" * 50)
+print("2-Й ВАРИАНТ: ИСПОЛЬЗОВАНИЕ CBALS_CGEMM ИЗ БИБЛИОТЕКИ BLAS")
+print(f"Размер матрицы: {N_LARGE}x{N_LARGE}")
+C_blas, time_blas, mflops_blas = measure_performance(matrix_multiply_blas, A_large, B_large)
+print(f"Время выполнения: {time_blas:.2f} секунд")
+print(f"Производительность: {mflops_blas:.2f} MFLOPS")
+print("=" * 50)
 
-    # Вариант 2: BLAS (4096x4096)
-    print("2. BLAS (4096x4096)")
-    n2 = 4096
-    A2 = generate_matrix(n2)
-    B2 = generate_matrix(n2)
-    
-    start = time.perf_counter()
-    np.dot(A2, B2)
-    time2 = time.perf_counter() - start
-    mflops2 = (2 * n2**3) / (time2 * 1e6)
-    
-    print(f"\n  Результаты:")
-    print(f"  Время: {time2:.6f} с")
-    print(f"  MFLOPS: {mflops2:.2f}")
-    print(f"  Память: {A2.nbytes * 3 / 1e6:.2f} МБ")
-    print("----------------------------------------\n")
+def matrix_multiply_optimized(A, B):
+    n = A.shape[0]
+    C = np.zeros((n, n), dtype=np.complex64)
+    block_size = 256
+    for i in range(0, n, block_size):
+        for j in range(0, n, block_size):
+            for k in range(0, n, block_size):
+                # Блочное умножение
+                C[i:i+block_size, j:j+block_size] += np.dot(
+                    A[i:i+block_size, k:k+block_size],
+                    B[k:k+block_size, j:j+block_size]
+                )
+    return C
+print("\n" + "=" * 50)
+print("3-Й ВАРИАНТ: ОПТИМИЗИРОВАННЫЙ АЛГОРИТМ")
+print(f"Размер матрицы: {N_LARGE}x{N_LARGE}")
+C_optimized, time_optimized, mflops_optimized = measure_performance(matrix_multiply_optimized, A_large, B_large)
+print(f"Время выполнения: {time_optimized:.2f} секунд")
+print(f"Производительность: {mflops_optimized:.2f} MFLOPS")
+print("=" * 50)
 
-    # Вариант 3: Гибридное адаптивное перемножение матриц
-    print("3. Свой метод (Гибридное адаптивное перемножение матриц)")
-    n3 = 4096
-    A3 = generate_matrix(n3)
-    B3 = generate_matrix(n3)
-    
-    start = time.perf_counter()
-    C3 = optimized_matmul(A3, B3)
-    time3 = time.perf_counter() - start
-    mflops3 = (2 * n3**3) / (time3 * 1e6)
-    
-    print(f"\n  Результаты:")
-    print(f"  Время: {time3:.6f} с")
-    print(f"  MFLOPS: {mflops3:.2f}")
-    print(f"  Память: {A3.nbytes * 3 / 1e6:.2f} МБ")
-    print(f"  Производительность: {mflops3/mflops2*100:.1f}% от BLAS")
-    print("\n========================================")
+print("\n" + "=" * 50)
+print("СРАВНЕНИЕ ПРОИЗВОДИТЕЛЬНОСТИ:")
+print(f"1-й вариант (размер {N_SMALL}x{N_SMALL}): {mflops_formula:.2f} MFLOPS")
+print(f"2-й вариант (размер {N_LARGE}x{N_LARGE}): {mflops_blas:.2f} MFLOPS")
+print(f"3-й вариант (размер {N_LARGE}x{N_LARGE}): {mflops_optimized:.2f} MFLOPS")
 
-    print("\nАВТОР:")
-    print("Попов Олег Михайлович")
-    print("090301-ПОВа-О24")
-
-if __name__ == "__main__":
-    main()
+performance_ratio = mflops_optimized / mflops_blas
+print(f"Отношение производительности (3-й / 2-й): {performance_ratio:.2f}")
+print("=" * 50)
 ```
 ## 📊 Результаты выполнения программы
 
-![image](https://github.com/user-attachments/assets/7312a216-d4e3-459c-abcc-276320fe6b16)
+![image](https://github.com/user-attachments/assets/5d9cc1d0-f109-4605-a129-c8a8f6b89cab)
+
